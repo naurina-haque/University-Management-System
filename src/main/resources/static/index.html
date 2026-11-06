@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>University Management System</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 950px; margin: 30px auto; padding: 0 15px; }
+        input, select, button { padding: 7px; margin: 4px 4px 4px 0; }
+        table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+        th, td { border: 1px solid #ccc; padding: 6px; text-align: left; }
+        .box { border: 1px solid #ddd; padding: 15px; margin-bottom: 15px; border-radius: 6px; }
+        .hidden { display: none; }
+        .err { color: red; }
+        .ok { color: green; }
+    </style>
+</head>
+<body>
+<h2>University Management System</h2>
+
+<!-- LOGIN -->
+<div id="loginBox" class="box">
+    <h3>Login</h3>
+    <input id="username" placeholder="Username"><br>
+    <input id="password" type="password" placeholder="Password"><br>
+    <button onclick="login()">Login</button>
+    <p id="loginErr" class="err"></p>
+</div>
+
+<!-- APP -->
+<div id="app" class="hidden">
+    <p>Logged in: <b id="who"></b> (<span id="role"></span>)
+        <button onclick="logout()">Logout</button></p>
+
+    <!-- MY PROFILE (for all) -->
+    <div class="box">
+        <h3>My Profile</h3>
+        <p>Department: <b id="myDept">-</b></p>
+        <input id="pName" placeholder="Full name"><br>
+        <input id="pEmail" placeholder="Email"><br>
+        <input id="pPhone" placeholder="Phone"><br>
+        <input id="pPass" type="password" placeholder="New password (optional)"><br>
+        <button onclick="saveProfile()">Update My Info</button>
+        <span id="pMsg"></span>
+    </div>
+
+    <!-- ADMIN PANEL -->
+    <div id="adminBox" class="hidden">
+        <div class="box">
+            <h3>Create Teacher / Student</h3>
+            <input id="cUser" placeholder="Username">
+            <input id="cPass" type="password" placeholder="Password (min 6)">
+            <select id="cRole"><option>TEACHER</option><option>STUDENT</option></select><br>
+            <input id="cName" placeholder="Full name">
+            <input id="cEmail" placeholder="Email">
+            <input id="cPhone" placeholder="Phone">
+            <input id="cDept" placeholder="Department"><br>
+            <button onclick="createUser()">Create</button>
+            <span id="cMsg"></span>
+        </div>
+
+        <div class="box">
+            <h3>All Users</h3>
+            <select id="filterRole" onchange="loadUsers()">
+                <option value="">ALL</option><option>TEACHER</option><option>STUDENT</option>
+            </select>
+            <table>
+                <thead><tr><th>ID</th><th>Username</th><th>Role</th><th>Name</th><th>Email</th><th>Phone</th><th>Dept</th><th>Action</th></tr></thead>
+                <tbody id="userRows"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+    let token = null, me = null, users = [];
+    const $ = id => document.getElementById(id);
+    const esc = s => (s ?? '').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+    async function api(url, method = 'GET', body = null) {
+        const headers = { 'Content-Type': 'application/json' };
+        if (token) headers['Authorization'] = 'Bearer ' + token;
+
+        const res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : null });
+
+        if (!res.ok) {
+            if (res.status === 401 && token) {   // token expire/invalid
+                alert('Session expired, please login again');
+                location.reload();
+                return;
+            }
+            let msg = 'Error ' + res.status;
+            try { const j = await res.json(); msg = j.message || msg; } catch (e) {}
+            throw new Error(msg);
+        }
+        return res.status === 204 ? null : res.json();
+    }
+
+    async function login() {
+        console.log('Login function called');
+        try {
+            const data = await api('/api/auth/login', 'POST',
+                { username: $('username').value, password: $('password').value });
+            token = data.token;
+
+            me = await api('/api/me');
+            $('loginBox').classList.add('hidden');
+            $('app').classList.remove('hidden');
+            $('loginErr').textContent = '';
+            showProfile();
+            if (me.role === 'ADMIN') {
+                $('adminBox').classList.remove('hidden');
+                loadUsers();
+            }
+        } catch (e) {
+            token = null;
+            $('loginErr').textContent = 'Invalid username or password';
+        }
+    }
+
+    function logout() { location.reload(); }
+
+    function showProfile() {
+        $('who').textContent = me.username;
+        $('role').textContent = me.role;
+        $('myDept').textContent = me.department || '-';
+        $('pName').value = me.fullName || '';
+        $('pEmail').value = me.email || '';
+        $('pPhone').value = me.phone || '';
+        $('pPass').value = '';
+    }
+
+    async function saveProfile() {
+        const body = { fullName: $('pName').value, email: $('pEmail').value, phone: $('pPhone').value };
+        const newPass = $('pPass').value;
+        if (newPass) body.password = newPass;
+        try {
+            me = await api('/api/me', 'PUT', body);
+
+            showProfile();
+            $('pMsg').className = 'ok'; $('pMsg').textContent = 'Updated!';
+        } catch (e) {
+            $('pMsg').className = 'err'; $('pMsg').textContent = e.message;
+        }
+    }
+
+    async function createUser() {
+        const body = {
+            username: $('cUser').value, password: $('cPass').value, role: $('cRole').value,
+            fullName: $('cName').value, email: $('cEmail').value,
+            phone: $('cPhone').value, department: $('cDept').value
+        };
+        try {
+            await api('/api/admin/users', 'POST', body);
+            $('cMsg').className = 'ok'; $('cMsg').textContent = 'Created!';
+            ['cUser','cPass','cName','cEmail','cPhone','cDept'].forEach(i => $(i).value = '');
+            loadUsers();
+        } catch (e) {
+            $('cMsg').className = 'err'; $('cMsg').textContent = e.message;
+        }
+    }
+
+    async function loadUsers() {
+        const role = $('filterRole').value;
+        users = await api('/api/admin/users' + (role ? '?role=' + role : ''));
+        $('userRows').innerHTML = users.filter(u => u.role !== 'ADMIN').map(u => `
+    <tr>
+      <td>${u.id}</td><td>${esc(u.username)}</td><td>${u.role}</td>
+      <td>${esc(u.fullName)}</td><td>${esc(u.email)}</td><td>${esc(u.phone)}</td><td>${esc(u.department)}</td>
+      <td>
+        <button onclick="editUser(${u.id})">Edit</button>
+        <button onclick="deleteUser(${u.id})">Delete</button>
+      </td>
+    </tr>`).join('');
+    }
+
+    async function editUser(id) {
+        const u = users.find(x => x.id === id);
+        const fullName = prompt('Full name', u.fullName || ''); if (fullName === null) return;
+        const email = prompt('Email', u.email || ''); if (email === null) return;
+        const phone = prompt('Phone', u.phone || ''); if (phone === null) return;
+        const department = prompt('Department', u.department || ''); if (department === null) return;
+        try {
+            await api('/api/admin/users/' + id, 'PUT', { fullName, email, phone, department });
+            loadUsers();
+        } catch (e) { alert(e.message); }
+    }
+
+    async function deleteUser(id) {
+        if (!confirm('Delete this user?')) return;
+        try { await api('/api/admin/users/' + id, 'DELETE'); loadUsers(); }
+        catch (e) { alert(e.message); }
+    }
+</script>
+</body>
+</html>
